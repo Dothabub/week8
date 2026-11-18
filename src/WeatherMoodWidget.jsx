@@ -8,8 +8,10 @@ function WeatherMoodWidget({ weather }) {
       <h2>{weather}</h2>
 
       <button onClick={() => setCount(count + 1)}>
-        Feeling Count: {count}
+        Click Count: {count}
       </button>
+
+      <hr />
     </div>
   );
 }
