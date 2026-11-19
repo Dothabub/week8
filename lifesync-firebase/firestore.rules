@@ -1,0 +1,108 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Active membership document of the caller in a household.
+    function member(hid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid)).data.active == true;
+    }
+
+    function myMember(hid) {
+      return get(/databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid)).data;
+    }
+
+    function isAdmin(hid) {
+      return member(hid) && myMember(hid).role == 'ADMIN';
+    }
+
+    // Per-member permission. Defaults MUST match src/lib/permissions.ts MEMBER_DEFAULTS.
+    // Admins always have every permission. Missing keys fall back to the default.
+    function can(hid, perm, defaultValue) {
+      return member(hid) && (
+        myMember(hid).role == 'ADMIN' ||
+        myMember(hid).permissions.get(perm, defaultValue) == true
+      );
+    }
+
+    // Private profile: only the owner reads/updates their own profile.
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, delete: if false;                      // created by the server only
+      allow update: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.keys().hasOnly(['name', 'updatedAt'])
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.name.size() <= 80;
+    }
+
+    match /households/{hid} {
+      allow read: if member(hid);
+      allow write: if false;                              // server-only (bootstrap / settings)
+
+      // Members list: every household member can see who is in the house.
+      match /members/{uid} {
+        allow read: if member(hid);
+        allow write: if false;                            // server-only: seat limit + last-admin rules
+      }
+
+      match /invitations/{iid} {
+        allow read: if isAdmin(hid);
+        allow write: if false;                            // server-only: token hashing, single use
+      }
+
+      // Shared household tasks: any member sees them. Assignee or permitted members update.
+      match /tasks/{tid} {
+        allow read: if member(hid) && (resource.data.isHousehold == true
+                      || resource.data.assigneeId == request.auth.uid
+                      || resource.data.createdById == request.auth.uid);
+        allow create: if member(hid) && request.resource.data.createdById == request.auth.uid
+                      && can(hid, 'manageOwnTasks', true);
+        allow update: if member(hid) && (resource.data.assigneeId == request.auth.uid || resource.data.createdById == request.auth.uid)
+                      && can(hid, 'manageOwnTasks', true);
+        allow delete: if member(hid) && resource.data.createdById == request.auth.uid;
+      }
+
+      // Personal records (shifts, earnings, personal expenses): owner only, always.
+      match /personal/{uid}/{doc=**} {
+        allow read, write: if signedIn() && request.auth.uid == uid && member(hid);
+      }
+
+      // Shared expenses: members read; members with addExpenses create; the payer or an admin edits.
+      match /expenses/{eid} {
+        allow read: if member(hid) && resource.data.deletedAt == null;
+        allow create: if can(hid, 'addExpenses', true) && request.resource.data.createdById == request.auth.uid
+                      && request.resource.data.totalAmount >= 0;
+        allow update: if member(hid) && (isAdmin(hid) || resource.data.createdById == request.auth.uid);
+        allow delete: if false;                           // soft delete (deletedAt) only
+      }
+
+      // Grocery stock: ledger is append-only; products editable with permission.
+      match /stockTransactions/{tid} {
+        allow read: if member(hid);
+        allow create: if can(hid, 'manageGroceryStock', true) && request.resource.data.quantity > 0
+                      && request.resource.data.userId == request.auth.uid;
+        allow update, delete: if false;
+      }
+      match /groceryProducts/{pid} {
+        allow read: if member(hid);
+        allow write: if can(hid, 'manageGroceryStock', true);
+      }
+
+      // Audit log: readable by admins, append-only.
+      match /auditLogs/{aid} {
+        allow read: if isAdmin(hid);
+        allow create: if false;                           // written by server functions
+        allow update, delete: if false;
+      }
+    }
+
+    // Everything else is denied by default.
+  }
+}

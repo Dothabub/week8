@@ -1,0 +1,17 @@
+{
+  "name": "lifesync-firebase",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "emulators": "firebase emulators:start --only firestore,auth",
+    "test:rules": "firebase emulators:exec --only firestore,auth --project lifesync-test \"vitest run\"",
+    "test": "npm run test:rules"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0",
+    "firebase-tools": "^15.37.0",
+    "vitest": "^3.2.7"
+  }
+}
