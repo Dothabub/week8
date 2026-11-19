@@ -1,0 +1,1295 @@
+// LifeSync – Smart Shared Living Planner
+// PostgreSQL schema (Prisma). Additional integrity rules that Prisma cannot
+// express (CHECK constraints, the 3-member seat limit, partial indexes) are
+// added in prisma/migrations/*_integrity_constraints/migration.sql.
+//
+// Conventions
+// - Money:      Decimal(12,2), never Float. Currency lives on Household.
+// - Quantities: Decimal(12,3) (kg, litre, etc.).
+// - Instants:   timestamptz (`DateTime @db.Timestamptz(6)`), stored in UTC.
+// - Recurring templates store wall-clock times as "HH:MM" strings plus an
+//   ISO weekday (1 = Monday … 7 = Sunday), interpreted in Household.timezone.
+// - Every household-owned row carries householdId so every query can be
+//   scoped to the caller's household (membership validation).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum JobSlot {
+  JOB1
+  JOB2
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  POSTPONED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskCategory {
+  WORK
+  UNIVERSITY
+  PLACEMENT
+  HOUSEHOLD
+  SHOPPING
+  PERSONAL
+  PASTA
+  FILISHAKE
+  OTHER
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  WORKED
+  CANCELLED
+  MISSED
+}
+
+enum UniSessionType {
+  LECTURE
+  SEMINAR
+  TUTORIAL
+  LAB
+  OTHER
+}
+
+enum UniDeadlineKind {
+  ASSIGNMENT
+  EXAM
+  OTHER
+}
+
+enum AttendanceStatus {
+  PLANNED
+  ATTENDED
+  ABSENT
+  EXCUSED
+}
+
+enum CommitmentKind {
+  FIXED // cannot be moved by the planner
+  FLEXIBLE // planner may move it within its window
+}
+
+enum PlanStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+enum PlanEngine {
+  RULE_BASED
+  AI_ASSISTED
+}
+
+enum PlanItemKind {
+  FIXED_COMMITMENT
+  TASK
+  TRAVEL_BUFFER
+  REST
+  STUDY
+  SHOPPING
+  HOUSEHOLD
+  ACTIVITY
+}
+
+enum PlanItemDecision {
+  PENDING
+  ACCEPTED
+  EDITED
+  REJECTED
+}
+
+enum ScheduleSource {
+  SHIFT
+  UNI_SESSION
+  PLACEMENT_SESSION
+  COMMITMENT
+  ACTIVITY
+  TASK
+  GENERATED
+}
+
+enum StockUnit {
+  KG
+  GRAM
+  LITRE
+  ML
+  PACKET
+  PIECE
+  DOZEN
+}
+
+enum StockTxnType {
+  STOCK_IN
+  STOCK_OUT
+  ADJUSTMENT
+  WASTE
+  EXPIRED
+}
+
+enum ShoppingListStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+}
+
+enum ShoppingItemSource {
+  MANUAL
+  LOW_STOCK
+  CONSUMPTION_FORECAST
+  MEAL_PLAN
+}
+
+enum ExpenseCategory {
+  FOOD
+  GROCERY
+  RENT
+  BILL
+  TRAVEL
+  ACTIVITY
+  OTHER
+}
+
+enum ExpenseScope {
+  PERSONAL
+  SHARED
+}
+
+enum SplitMethod {
+  EQUAL
+  CUSTOM_AMOUNT
+  PERCENTAGE
+  SINGLE_PAYER
+}
+
+enum TransportType {
+  BUS
+  TRAIN
+  UNDERGROUND
+  TAXI
+  FUEL
+  PARKING
+  OTHER
+}
+
+enum BillType {
+  RENT
+  ELECTRICITY
+  GAS
+  WATER
+  INTERNET
+  COUNCIL_TAX
+  OTHER
+}
+
+enum BillStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum IncomeSource {
+  JOB1
+  JOB2
+  PLACEMENT
+  OTHER
+}
+
+enum PaymentStatus {
+  EXPECTED
+  RECEIVED
+  LATE
+  CANCELLED
+}
+
+enum NotificationType {
+  WORK_SHIFT
+  UNIVERSITY_CLASS
+  UNIVERSITY_DEADLINE
+  PLACEMENT
+  TASK_DEADLINE
+  RENT_DUE
+  BILL_DUE
+  LOW_STOCK
+  SHOPPING_REMINDER
+  HOUSEHOLD_TASK
+  PLAN_READY
+  SYSTEM
+}
+
+enum RecommendationStatus {
+  ACTIVE
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Household, identity, access control
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Household {
+  id           String   @id @default(cuid())
+  name         String
+  currency     String   @default("GBP") @db.Char(3) // ISO 4217
+  timezone     String   @default("Europe/London")
+  weekStartsOn Int      @default(1) // ISO weekday
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+
+  memberships        Membership[]
+  invitations        Invitation[]
+  jobs               Job[]
+  shifts             Shift[]
+  uniModules         UniModule[]
+  placements         Placement[]
+  commitments        Commitment[]
+  activityCategories ActivityCategory[]
+  activities         Activity[]
+  tasks              Task[]
+  weeklyPlans        WeeklyPlan[]
+  groceryProducts    GroceryProduct[]
+  stockTransactions  StockTransaction[]
+  shoppingLists      ShoppingList[]
+  expenses           Expense[]
+  settlements        Settlement[]
+  recurringBills     RecurringBill[]
+  bills              Bill[]
+  earnings           Earning[]
+  budgets            Budget[]
+  behaviourEvents    BehaviourEvent[]
+  recommendations    Recommendation[]
+  auditLogs          AuditLog[]
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique // stored lower-cased
+  passwordHash     String? // null until the invitation is accepted
+  name             String
+  avatarUrl        String?
+  emailVerifiedAt  DateTime? @db.Timestamptz(6)
+  lastLoginAt      DateTime? @db.Timestamptz(6)
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  membership        Membership?
+  sessions          Session[]
+  preferences       UserPreference?
+  notificationPrefs NotificationPreference[]
+  invitationsSent   Invitation[]             @relation("InvitedBy")
+  jobs              Job[]
+  shifts            Shift[]
+  uniModules        UniModule[]
+  placements        Placement[]
+  commitments       Commitment[]
+  activities        Activity[]
+  tasksAssigned     Task[]                   @relation("TaskAssignee")
+  tasksCreated      Task[]                   @relation("TaskCreator")
+  taskNotes         TaskNote[]
+  taskEvents        TaskEvent[]
+  planItems         WeeklyPlanItem[]
+  planDecisions     PlanDecision[]
+  plansCreated      WeeklyPlan[]             @relation("PlanCreator")
+  plansApproved     WeeklyPlan[]             @relation("PlanApprover")
+  stockTransactions StockTransaction[]
+  shoppingAssigned  ShoppingList[]
+  shoppingPurchased ShoppingListItem[]
+  expensesPaid      Expense[]                @relation("ExpensePayer")
+  expensesCreated   Expense[]                @relation("ExpenseCreator")
+  expenseShares     ExpenseShare[]
+  settlementsFrom   Settlement[]             @relation("SettlementFrom")
+  settlementsTo     Settlement[]             @relation("SettlementTo")
+  billContributions BillContribution[]
+  earnings          Earning[]
+  notifications     Notification[]
+  behaviourEvents   BehaviourEvent[]
+  recommendations   Recommendation[]
+  auditLogs         AuditLog[]
+  groceryPurchases  GroceryProduct[]         @relation("LastPurchasedBy")
+}
+
+/// One user belongs to at most one household (User.membership is 1:1).
+/// `seat` is constrained to 1..3 and unique per household in SQL, which
+/// enforces the "exactly three people" limit at the database level.
+model Membership {
+  id          String   @id @default(cuid())
+  householdId String
+  userId      String   @unique
+  role        Role     @default(MEMBER)
+  seat        Int // 1..3 (CHECK constraint)
+  /// Admin-configurable fine-grained permissions, e.g.
+  /// { "manageSharedSchedules": true, "manageHouseholdFinances": false }
+  permissions Json     @default("{}")
+  active      Boolean  @default(true)
+  joinedAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, seat])
+  @@index([householdId])
+}
+
+model Invitation {
+  id          String    @id @default(cuid())
+  householdId String
+  email       String
+  role        Role      @default(MEMBER)
+  tokenHash   String    @unique // SHA-256 of the one-time token; raw token is never stored
+  invitedById String?
+  expiresAt   DateTime  @db.Timestamptz(6)
+  acceptedAt  DateTime? @db.Timestamptz(6)
+  revokedAt   DateTime? @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  invitedBy User?     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([householdId, email])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique // SHA-256 of the cookie token
+  expiresAt  DateTime @db.Timestamptz(6)
+  userAgent  String?
+  ipHash     String?
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  lastSeenAt DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model UserPreference {
+  userId                     String  @id
+  theme                      String  @default("system") // system | light | dark
+  dayStartTime               String  @default("07:00") // planner: earliest flexible slot
+  dayEndTime                 String  @default("22:30") // planner: latest flexible slot
+  maxWorkMinutesPerDay       Int     @default(600)
+  maxPlannedMinutesPerDay    Int     @default(720) // fixed + flexible load cap
+  minRestMinutesBetween      Int     @default(15)
+  defaultTravelMinutes       Int     @default(30)
+  preferredShoppingDays      Int[]   @default([]) // ISO weekdays
+  studyBlockMinutes          Int     @default(90)
+  behaviourAnalysisEnabled   Boolean @default(true)
+  shareEarningsWithHousehold Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  id          String           @id @default(cuid())
+  userId      String
+  type        NotificationType
+  inApp       Boolean          @default(true)
+  email       Boolean          @default(false)
+  push        Boolean          @default(false)
+  leadMinutes Int              @default(60)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Work: up to two jobs per member (only enabled jobs are used)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Job {
+  id               String   @id @default(cuid())
+  householdId      String
+  userId           String
+  slot             JobSlot
+  name             String
+  workplace        String?
+  workplaceAddress String?
+  hourlyRate       Decimal? @db.Decimal(10, 2)
+  travelMinutes    Int      @default(30) // one-way travel time to workplace
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
+
+  household Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templates ShiftTemplate[]
+  shifts    Shift[]
+  earnings  Earning[]
+
+  @@unique([userId, slot])
+  @@index([householdId])
+}
+
+/// Recurring weekly shift pattern. Concrete Shift rows are materialised per week.
+model ShiftTemplate {
+  id           String    @id @default(cuid())
+  jobId        String
+  isoWeekday   Int // 1..7
+  startTime    String // "HH:MM"
+  endTime      String // "HH:MM" (may be < startTime for overnight shifts)
+  breakMinutes Int       @default(0)
+  validFrom    DateTime  @db.Date
+  validUntil   DateTime? @db.Date
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+
+  job    Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  shifts Shift[]
+
+  @@index([jobId])
+}
+
+model Shift {
+  id               String      @id @default(cuid())
+  householdId      String
+  jobId            String
+  userId           String
+  templateId       String?
+  startAt          DateTime    @db.Timestamptz(6)
+  endAt            DateTime    @db.Timestamptz(6)
+  breakMinutes     Int         @default(0)
+  status           ShiftStatus @default(SCHEDULED)
+  expectedEarnings Decimal?    @db.Decimal(12, 2)
+  actualEarnings   Decimal?    @db.Decimal(12, 2)
+  actualStartAt    DateTime?   @db.Timestamptz(6)
+  actualEndAt      DateTime?   @db.Timestamptz(6)
+  notes            String?
+  createdAt        DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime    @updatedAt @db.Timestamptz(6)
+
+  household Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  job       Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template  ShiftTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  earnings  Earning[]
+
+  @@unique([templateId, startAt]) // idempotent materialisation of recurring shifts
+  @@index([userId, startAt])
+  @@index([householdId, startAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// University
+// ─────────────────────────────────────────────────────────────────────────────
+
+model UniModule {
+  id          String   @id @default(cuid())
+  householdId String
+  userId      String
+  code        String?
+  name        String
+  color       String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  household Household            @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templates UniSessionTemplate[]
+  sessions  UniSession[]
+  deadlines UniDeadline[]
+
+  @@index([userId])
+}
+
+model UniSessionTemplate {
+  id            String         @id @default(cuid())
+  moduleId      String
+  type          UniSessionType
+  isoWeekday    Int
+  startTime     String
+  endTime       String
+  location      String?
+  room          String?
+  lecturerNotes String?
+  travelMinutes Int            @default(30)
+  validFrom     DateTime       @db.Date
+  validUntil    DateTime?      @db.Date
+
+  module   UniModule    @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  sessions UniSession[]
+
+  @@index([moduleId])
+}
+
+model UniSession {
+  id         String           @id @default(cuid())
+  moduleId   String
+  templateId String?
+  type       UniSessionType
+  startAt    DateTime         @db.Timestamptz(6)
+  endAt      DateTime         @db.Timestamptz(6)
+  location   String?
+  room       String?
+  attendance AttendanceStatus @default(PLANNED)
+  notes      String?
+
+  module   UniModule           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  template UniSessionTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@unique([templateId, startAt])
+  @@index([moduleId, startAt])
+}
+
+model UniDeadline {
+  id                   String          @id @default(cuid())
+  moduleId             String
+  kind                 UniDeadlineKind
+  title                String
+  dueAt                DateTime        @db.Timestamptz(6)
+  location             String?
+  estimatedPrepMinutes Int?
+  completedAt          DateTime?       @db.Timestamptz(6)
+  notes                String?
+
+  module UniModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([moduleId, dueAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Placement
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Placement {
+  id            String    @id @default(cuid())
+  householdId   String
+  userId        String
+  organisation  String
+  location      String?
+  startDate     DateTime  @db.Date
+  endDate       DateTime? @db.Date
+  requiredHours Decimal?  @db.Decimal(7, 2)
+  isPaid        Boolean   @default(false)
+  hourlyRate    Decimal?  @db.Decimal(10, 2)
+  travelMinutes Int       @default(30)
+  notes         String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+
+  household Household                  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templates PlacementSessionTemplate[]
+  sessions  PlacementSession[]
+  deadlines PlacementDeadline[]
+
+  @@index([userId])
+}
+
+model PlacementSessionTemplate {
+  id          String    @id @default(cuid())
+  placementId String
+  isoWeekday  Int
+  startTime   String
+  endTime     String
+  validFrom   DateTime  @db.Date
+  validUntil  DateTime? @db.Date
+
+  placement Placement          @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  sessions  PlacementSession[]
+
+  @@index([placementId])
+}
+
+model PlacementSession {
+  id                 String           @id @default(cuid())
+  placementId        String
+  templateId         String?
+  startAt            DateTime         @db.Timestamptz(6)
+  endAt              DateTime         @db.Timestamptz(6)
+  attendance         AttendanceStatus @default(PLANNED)
+  hoursCompleted     Decimal?         @db.Decimal(5, 2)
+  tasks              String?
+  learningActivities String?
+  notes              String?
+
+  placement Placement                 @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  template  PlacementSessionTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@unique([templateId, startAt])
+  @@index([placementId, startAt])
+}
+
+model PlacementDeadline {
+  id          String    @id @default(cuid())
+  placementId String
+  title       String
+  dueAt       DateTime  @db.Timestamptz(6)
+  completedAt DateTime? @db.Timestamptz(6)
+  notes       String?
+
+  placement Placement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+
+  @@index([placementId, dueAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personal commitments, Pasta / Filishake and other configurable activities
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One-off or recurring personal commitments entered in the weekly routine.
+model Commitment {
+  id            String         @id @default(cuid())
+  householdId   String
+  userId        String
+  title         String
+  kind          CommitmentKind @default(FIXED)
+  startAt       DateTime?      @db.Timestamptz(6) // one-off
+  endAt         DateTime?      @db.Timestamptz(6)
+  isoWeekday    Int? // recurring
+  startTime     String?
+  endTime       String?
+  validFrom     DateTime?      @db.Date
+  validUntil    DateTime?      @db.Date
+  location      String?
+  travelMinutes Int            @default(0)
+  notes         String?
+  createdAt     DateTime       @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startAt])
+}
+
+/// "Pasta" and "Filishake" are seeded with system keys but their meaning
+/// (description) is defined by the users – the app does not assume a purpose.
+model ActivityCategory {
+  id          String   @id @default(cuid())
+  householdId String
+  key         String // "PASTA", "FILISHAKE" or a custom slug
+  name        String
+  description String? // user-defined meaning
+  color       String?
+  icon        String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  household  Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  activities Activity[]
+  tasks      Task[]
+
+  @@unique([householdId, key])
+}
+
+model Activity {
+  id              String         @id @default(cuid())
+  householdId     String
+  categoryId      String
+  userId          String
+  title           String
+  kind            CommitmentKind @default(FLEXIBLE)
+  startAt         DateTime?      @db.Timestamptz(6)
+  endAt           DateTime?      @db.Timestamptz(6)
+  isoWeekday      Int?
+  startTime       String?
+  endTime         String?
+  durationMinutes Int?
+  cost            Decimal?       @db.Decimal(12, 2)
+  notes           String?
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+
+  household Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  category  ActivityCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tasks
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Task {
+  id                 String       @id @default(cuid())
+  householdId        String
+  title              String
+  description        String?
+  assigneeId         String?
+  createdById        String
+  category           TaskCategory @default(PERSONAL)
+  activityCategoryId String?
+  priority           TaskPriority @default(MEDIUM)
+  status             TaskStatus   @default(NOT_STARTED)
+  isHousehold        Boolean      @default(false) // shared household responsibility
+  date               DateTime?    @db.Date
+  startAt            DateTime?    @db.Timestamptz(6)
+  deadlineAt         DateTime?    @db.Timestamptz(6)
+  estimatedMinutes   Int?
+  actualMinutes      Int?
+  startedAt          DateTime?    @db.Timestamptz(6)
+  completedAt        DateTime?    @db.Timestamptz(6)
+  reminderAt         DateTime?    @db.Timestamptz(6)
+  postponeCount      Int          @default(0)
+  recurrenceId       String?
+  planItemId         String?      @unique
+  createdAt          DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @db.Timestamptz(6)
+
+  household        Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  assignee         User?             @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy        User              @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  activityCategory ActivityCategory? @relation(fields: [activityCategoryId], references: [id], onDelete: SetNull)
+  recurrence       TaskRecurrence?   @relation(fields: [recurrenceId], references: [id], onDelete: SetNull)
+  planItem         WeeklyPlanItem?   @relation(fields: [planItemId], references: [id], onDelete: SetNull)
+  notes            TaskNote[]
+  events           TaskEvent[]
+
+  @@index([householdId, date])
+  @@index([assigneeId, status, date])
+  @@index([householdId, isHousehold, status])
+  @@index([deadlineAt])
+}
+
+/// A recurring-task rule. Occurrences are materialised as Task rows.
+model TaskRecurrence {
+  id              String              @id @default(cuid())
+  frequency       RecurrenceFrequency
+  interval        Int                 @default(1)
+  isoWeekdays     Int[]               @default([]) // for WEEKLY
+  dayOfMonth      Int? // for MONTHLY
+  startTime       String?
+  startsOn        DateTime            @db.Date
+  endsOn          DateTime?           @db.Date
+  /// Template fields copied into each occurrence.
+  template        Json
+  rotateAssignees Boolean             @default(false) // household chores rotation
+  createdAt       DateTime            @default(now()) @db.Timestamptz(6)
+
+  tasks Task[]
+}
+
+model TaskNote {
+  id        String   @id @default(cuid())
+  taskId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+/// Status history – the raw material for postponement / completion analysis.
+model TaskEvent {
+  id         String      @id @default(cuid())
+  taskId     String
+  actorId    String?
+  fromStatus TaskStatus?
+  toStatus   TaskStatus
+  fromDate   DateTime?   @db.Timestamptz(6)
+  toDate     DateTime?   @db.Timestamptz(6)
+  reason     String?
+  createdAt  DateTime    @default(now()) @db.Timestamptz(6)
+
+  task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Weekly planning (rule-based engine, optional AI assistance)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model WeeklyPlan {
+  id            String     @id @default(cuid())
+  householdId   String
+  weekStart     DateTime   @db.Date // Monday, household timezone
+  version       Int        @default(1)
+  status        PlanStatus @default(DRAFT)
+  engine        PlanEngine @default(RULE_BASED)
+  engineVersion String
+  /// Snapshot of every input used (schedules, tasks, prefs, behaviour stats)
+  /// so a plan is reproducible and explainable.
+  inputSnapshot Json
+  /// Conflicts, unscheduled tasks, warnings and questions for the users.
+  diagnostics   Json       @default("{}")
+  createdById   String
+  approvedById  String?
+  approvedAt    DateTime?  @db.Timestamptz(6)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(6)
+
+  household  Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  createdBy  User             @relation("PlanCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?            @relation("PlanApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  items      WeeklyPlanItem[]
+
+  @@unique([householdId, weekStart, version])
+  @@index([householdId, weekStart, status])
+}
+
+model WeeklyPlanItem {
+  id                String           @id @default(cuid())
+  planId            String
+  userId            String
+  kind              PlanItemKind
+  title             String
+  startAt           DateTime         @db.Timestamptz(6)
+  endAt             DateTime         @db.Timestamptz(6)
+  isFixed           Boolean          @default(false)
+  sourceType        ScheduleSource
+  sourceId          String?
+  /// Human-readable explanation of why the item was placed here.
+  reason            String
+  confidence        Decimal          @default(1) @db.Decimal(3, 2) // 0..1
+  needsConfirmation Boolean          @default(false)
+  decision          PlanItemDecision @default(PENDING)
+
+  plan      WeeklyPlan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task      Task?
+  decisions PlanDecision[]
+
+  @@index([planId, userId, startAt])
+}
+
+/// Every approve / edit / reject a user makes on a suggested item. Used to
+/// learn preferred times and which suggestion types get rejected.
+model PlanDecision {
+  id            String           @id @default(cuid())
+  planItemId    String
+  userId        String
+  decision      PlanItemDecision
+  originalStart DateTime         @db.Timestamptz(6)
+  originalEnd   DateTime         @db.Timestamptz(6)
+  finalStart    DateTime?        @db.Timestamptz(6)
+  finalEnd      DateTime?        @db.Timestamptz(6)
+  comment       String?
+  createdAt     DateTime         @default(now()) @db.Timestamptz(6)
+
+  planItem WeeklyPlanItem @relation(fields: [planItemId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Grocery, stock and shopping
+// ─────────────────────────────────────────────────────────────────────────────
+
+model GroceryProduct {
+  id                String    @id @default(cuid())
+  householdId       String
+  name              String
+  category          String    @default("General")
+  unit              StockUnit
+  currentStock      Decimal   @default(0) @db.Decimal(12, 3) // maintained by StockTransaction in the same DB transaction
+  minimumStock      Decimal   @default(0) @db.Decimal(12, 3)
+  preferredQuantity Decimal?  @db.Decimal(12, 3) // usual purchase size
+  lastPurchasePrice Decimal?  @db.Decimal(12, 2) // per unit
+  lastPurchasedAt   DateTime? @db.Timestamptz(6)
+  lastPurchasedById String?
+  isDefault         Boolean   @default(false)
+  active            Boolean   @default(true)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(6)
+
+  household       Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  lastPurchasedBy User?              @relation("LastPurchasedBy", fields: [lastPurchasedById], references: [id], onDelete: SetNull)
+  transactions    StockTransaction[]
+  shoppingItems   ShoppingListItem[]
+  expenseItems    ExpenseItem[]
+
+  @@unique([householdId, name])
+  @@index([householdId, active])
+}
+
+/// Append-only ledger. currentStock = Σ signed quantities. Consumption is only
+/// recorded when a user logs STOCK_OUT – purchases are never assumed consumed.
+model StockTransaction {
+  id             String       @id @default(cuid())
+  householdId    String
+  productId      String
+  userId         String?
+  type           StockTxnType
+  quantity       Decimal      @db.Decimal(12, 3) // always positive; sign derived from type (ADJUSTMENT may be ±, see signedQuantity)
+  signedQuantity Decimal      @db.Decimal(12, 3)
+  balanceAfter   Decimal      @db.Decimal(12, 3)
+  unitPrice      Decimal?     @db.Decimal(12, 2)
+  expiryDate     DateTime?    @db.Date
+  expenseItemId  String?
+  note           String?
+  occurredAt     DateTime     @default(now()) @db.Timestamptz(6)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+
+  household   Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product     GroceryProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user        User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  expenseItem ExpenseItem?   @relation(fields: [expenseItemId], references: [id], onDelete: SetNull)
+
+  @@index([productId, occurredAt])
+  @@index([householdId, type, occurredAt])
+  @@index([expiryDate])
+}
+
+model ShoppingList {
+  id           String             @id @default(cuid())
+  householdId  String
+  title        String
+  status       ShoppingListStatus @default(OPEN)
+  plannedDate  DateTime?          @db.Date
+  assignedToId String?
+  expenseId    String?            @unique // created when the shop is completed
+  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
+  completedAt  DateTime?          @db.Timestamptz(6)
+
+  household  Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  assignedTo User?              @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  expense    Expense?           @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  items      ShoppingListItem[]
+
+  @@index([householdId, status])
+}
+
+model ShoppingListItem {
+  id             String             @id @default(cuid())
+  listId         String
+  productId      String?
+  name           String
+  quantity       Decimal            @db.Decimal(12, 3)
+  unit           StockUnit
+  estimatedPrice Decimal?           @db.Decimal(12, 2) // line estimate
+  actualPrice    Decimal?           @db.Decimal(12, 2) // line actual
+  source         ShoppingItemSource @default(MANUAL)
+  sourceReason   String?
+  purchased      Boolean            @default(false)
+  purchasedById  String?
+  purchasedAt    DateTime?          @db.Timestamptz(6)
+
+  list        ShoppingList    @relation(fields: [listId], references: [id], onDelete: Cascade)
+  product     GroceryProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  purchasedBy User?           @relation(fields: [purchasedById], references: [id], onDelete: SetNull)
+
+  @@index([listId])
+  @@index([productId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expenses (food, grocery, travel, other) and shared contributions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Single ledger for spending. Sum(ExpenseShare.amount) must equal totalAmount
+/// for SHARED expenses (validated in the service layer inside a transaction).
+model Expense {
+  id          String          @id @default(cuid())
+  householdId String
+  category    ExpenseCategory
+  description String
+  totalAmount Decimal         @db.Decimal(12, 2)
+  occurredAt  DateTime        @db.Timestamptz(6)
+  paidById    String
+  createdById String
+  scope       ExpenseScope    @default(PERSONAL)
+  splitMethod SplitMethod     @default(SINGLE_PAYER)
+  merchant    String?
+  notes       String?
+  deletedAt   DateTime?       @db.Timestamptz(6) // soft delete keeps history
+  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @db.Timestamptz(6)
+
+  household    Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  paidBy       User           @relation("ExpensePayer", fields: [paidById], references: [id], onDelete: Restrict)
+  createdBy    User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  items        ExpenseItem[]
+  shares       ExpenseShare[]
+  travel       TravelDetail?
+  shoppingList ShoppingList?
+
+  @@index([householdId, category, occurredAt])
+  @@index([paidById, occurredAt])
+}
+
+/// Individual product lines (e.g. Rice 5 kg × £2 = £10).
+model ExpenseItem {
+  id        String     @id @default(cuid())
+  expenseId String
+  productId String?
+  name      String
+  quantity  Decimal    @db.Decimal(12, 3)
+  unit      StockUnit?
+  unitPrice Decimal    @db.Decimal(12, 2)
+  lineTotal Decimal    @db.Decimal(12, 2) // quantity × unitPrice, rounded half-up
+  category  String?
+
+  expense      Expense            @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  product      GroceryProduct?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  stockEntries StockTransaction[]
+
+  @@index([expenseId])
+  @@index([productId])
+}
+
+/// Who benefited and how much each person owes for an expense.
+model ExpenseShare {
+  id         String   @id @default(cuid())
+  expenseId  String
+  userId     String
+  amount     Decimal  @db.Decimal(12, 2)
+  percentage Decimal? @db.Decimal(5, 2)
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+}
+
+model TravelDetail {
+  expenseId     String        @id
+  transportType TransportType
+  fromPlace     String?
+  toPlace       String?
+  purpose       String?
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+}
+
+/// Repayment between members to settle shared balances.
+model Settlement {
+  id          String   @id @default(cuid())
+  householdId String
+  fromUserId  String
+  toUserId    String
+  amount      Decimal  @db.Decimal(12, 2)
+  settledAt   DateTime @db.Timestamptz(6)
+  note        String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  fromUser  User      @relation("SettlementFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUser    User      @relation("SettlementTo", fields: [toUserId], references: [id], onDelete: Restrict)
+
+  @@index([householdId, settledAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rent and bills
+// ─────────────────────────────────────────────────────────────────────────────
+
+model RecurringBill {
+  id          String    @id @default(cuid())
+  householdId String
+  type        BillType
+  name        String
+  amount      Decimal   @db.Decimal(12, 2)
+  dueDay      Int // 1..28 day of month
+  /// Configured split, e.g. {"method":"PERCENTAGE","shares":{"<userId>":50,...}}.
+  /// Never assumed equal unless configured.
+  splitConfig Json
+  active      Boolean   @default(true)
+  startsOn    DateTime  @db.Date
+  endsOn      DateTime? @db.Date
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  bills     Bill[]
+
+  @@index([householdId])
+}
+
+model Bill {
+  id              String     @id @default(cuid())
+  householdId     String
+  recurringBillId String?
+  type            BillType
+  name            String
+  amount          Decimal    @db.Decimal(12, 2)
+  periodMonth     DateTime   @db.Date // first day of the billing month
+  dueDate         DateTime   @db.Date
+  status          BillStatus @default(UNPAID)
+  paidAt          DateTime?  @db.Timestamptz(6)
+  notes           String?
+  createdAt       DateTime   @default(now()) @db.Timestamptz(6)
+
+  household     Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  recurringBill RecurringBill?     @relation(fields: [recurringBillId], references: [id], onDelete: SetNull)
+  contributions BillContribution[]
+  dueShares     BillShare[]
+
+  @@unique([recurringBillId, periodMonth])
+  @@index([householdId, dueDate])
+}
+
+/// The amount each member is responsible for on a bill (from splitConfig).
+model BillShare {
+  id     String  @id @default(cuid())
+  billId String
+  userId String
+  amount Decimal @db.Decimal(12, 2)
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([billId, userId])
+}
+
+/// Actual money a member has paid toward a bill.
+model BillContribution {
+  id     String   @id @default(cuid())
+  billId String
+  userId String
+  amount Decimal  @db.Decimal(12, 2)
+  paidAt DateTime @db.Timestamptz(6)
+  note   String?
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([billId])
+  @@index([userId, paidAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Earnings (personal; shared only if the member opts in)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Earning {
+  id                  String        @id @default(cuid())
+  householdId         String
+  userId              String
+  source              IncomeSource
+  jobId               String?
+  shiftId             String?
+  description         String?
+  amount              Decimal       @db.Decimal(12, 2)
+  earnedDate          DateTime      @db.Date
+  expectedPaymentDate DateTime?     @db.Date
+  actualPaymentDate   DateTime?     @db.Date
+  status              PaymentStatus @default(EXPECTED)
+  createdAt           DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime      @updatedAt @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job       Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  shift     Shift?    @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([userId, earnedDate])
+  @@index([householdId, earnedDate])
+}
+
+model Budget {
+  id          String           @id @default(cuid())
+  householdId String
+  month       DateTime         @db.Date
+  category    ExpenseCategory?
+  amount      Decimal          @db.Decimal(12, 2)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, month, category])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Notifications, behaviour history, recommendations, audit
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Notification {
+  id           String           @id @default(cuid())
+  userId       String
+  type         NotificationType
+  title        String
+  body         String?
+  link         String?
+  scheduledFor DateTime         @db.Timestamptz(6)
+  sentAt       DateTime?        @db.Timestamptz(6)
+  readAt       DateTime?        @db.Timestamptz(6)
+  dedupeKey    String           @unique // e.g. "SHIFT:<id>:60" – prevents duplicates
+  createdAt    DateTime         @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, scheduledFor])
+}
+
+/// Immutable record of meaningful behaviour (task completed/postponed, shift
+/// worked, attendance, shopping trip…). Only written when the user has
+/// behaviour analysis enabled.
+model BehaviourEvent {
+  id          String   @id @default(cuid())
+  householdId String
+  userId      String
+  type        String // e.g. TASK_COMPLETED, TASK_POSTPONED, SHIFT_WORKED, SHOPPING_TRIP
+  entityType  String
+  entityId    String
+  payload     Json
+  occurredAt  DateTime @db.Timestamptz(6)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, occurredAt])
+  @@index([householdId, type, occurredAt])
+}
+
+model Recommendation {
+  id          String               @id @default(cuid())
+  householdId String
+  userId      String? // null = household-wide
+  type        String // SHOPPING_DAY, GROCERY_BUDGET, STUDY_SLOT, TASK_REDISTRIBUTION, RESTOCK, SAVING
+  title       String
+  explanation String // why it was generated, in plain language
+  evidence    Json // the exact aggregates/records used
+  status      RecommendationStatus @default(ACTIVE)
+  validUntil  DateTime?            @db.Timestamptz(6)
+  createdAt   DateTime             @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, status])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  householdId String
+  actorId     String?
+  action      String // CREATE | UPDATE | DELETE | APPROVE | LOGIN | ...
+  entityType  String
+  entityId    String
+  before      Json?
+  after       Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([householdId, createdAt])
+  @@index([entityType, entityId])
+}
