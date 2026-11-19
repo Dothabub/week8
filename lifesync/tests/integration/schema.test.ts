@@ -1,15 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient } from "@prisma/client";
 import { bootstrapHousehold } from "@/server/bootstrap";
 import { hashToken } from "@/lib/tokens";
 
-const db = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
-
-async function wipe() {
-  // Test database only (guarded in global-setup).
-  const tables: { tablename: string }[] = await db.$queryRaw`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_prisma_migrations'`;
-  await db.$executeRawUnsafe(`TRUNCATE ${tables.map((t) => `"${t.tablename}"`).join(", ")} CASCADE`);
-}
+import { db, wipe } from "../helpers/db";
 
 async function setup() {
   const { household, inviteToken } = await bootstrapHousehold(db, { householdName: "Test Home", adminEmail: "Admin@Example.com" });

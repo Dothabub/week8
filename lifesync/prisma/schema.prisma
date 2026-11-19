@@ -341,6 +341,7 @@ model User {
   recommendations   Recommendation[]
   auditLogs         AuditLog[]
   groceryPurchases  GroceryProduct[]         @relation("LastPurchasedBy")
+  avatar            UserAvatar?
 }
 
 /// One user belongs to at most one household (User.membership is 1:1).
@@ -381,6 +382,17 @@ model Invitation {
   invitedBy User?     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@index([householdId, email])
+}
+
+/// Profile photo bytes (≤ 512 KB, JPEG/PNG/WebP). Kept in the database so it is
+/// only served to authenticated household members, never from a public bucket.
+model UserAvatar {
+  userId    String   @id
+  mimeType  String
+  data      Bytes
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Session {

@@ -1,26 +1,117 @@
 @import "tailwindcss";
 
+/* Class-based dark mode driven by <html data-theme="dark"> */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── Design tokens ────────────────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #f7f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f2f5;
+  --surface-3: #e8eaef;
+  --border: #e4e6eb;
+  --border-strong: #d3d6de;
+  --text: #0f1219;
+  --text-muted: #5b6272;
+  --text-subtle: #8a91a0;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef0ff;
+  --accent-fg: #ffffff;
+  --success: #059669;
+  --success-soft: #e7f7f0;
+  --warning: #c27803;
+  --warning-soft: #fdf5e4;
+  --danger: #dc2626;
+  --danger-soft: #fdecec;
+  --ring: rgb(79 70 229 / 0.35);
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 12px 32px -8px rgb(16 24 40 / 0.18), 0 2px 6px rgb(16 24 40 / 0.06);
+
+  /* Category colours (tasks, timeline) */
+  --cat-work: #2563eb;
+  --cat-university: #7c3aed;
+  --cat-placement: #0d9488;
+  --cat-household: #ea580c;
+  --cat-shopping: #db2777;
+  --cat-personal: #4b5563;
+  --cat-pasta: #f59e0b;
+  --cat-filishake: #8b5cf6;
+  --cat-other: #64748b;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #0b0d12;
+  --surface: #12151c;
+  --surface-2: #181c25;
+  --surface-3: #222734;
+  --border: #232836;
+  --border-strong: #303748;
+  --text: #eef0f5;
+  --text-muted: #a3aaba;
+  --text-subtle: #737b8e;
+  --accent: #8b85ff;
+  --accent-hover: #a29dff;
+  --accent-soft: #1f1d3d;
+  --accent-fg: #0b0d12;
+  --success: #34d399;
+  --success-soft: #0f2a21;
+  --warning: #fbbf24;
+  --warning-soft: #2c2312;
+  --danger: #f87171;
+  --danger-soft: #311717;
+  --ring: rgb(139 133 255 / 0.45);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 16px 40px -8px rgb(0 0 0 / 0.6);
+  --cat-work: #60a5fa;
+  --cat-university: #a78bfa;
+  --cat-placement: #2dd4bf;
+  --cat-household: #fb923c;
+  --cat-shopping: #f472b6;
+  --cat-personal: #9ca3af;
+  --cat-pasta: #fbbf24;
+  --cat-filishake: #c4b5fd;
+  --cat-other: #94a3b8;
+  color-scheme: dark;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-muted: var(--text-muted);
+  --color-subtle: var(--text-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: var(--font-sans); font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; }
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+.tabular { font-variant-numeric: tabular-nums; }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
